@@ -33,7 +33,7 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 
 ### 1.3 产品定位
 
-将 Audiblez **封装为懒猫微服 LPK 应用**：内嵌 Docker 镜像 + Web 操作界面 + 网盘集成，支持本地 `project build` 与 `lpk install` 部署验证。
+将 Audiblez **封装为懒猫微服 LPK 应用**：内嵌 Docker 镜像 + FastAPI Web 操作界面 + 分阶段网盘集成，支持本地 `project build` 与 `lpk install` 部署验证。
 
 **不在 MVP 范围：** 上架提审、GPU 算力舱、多用户队列调度、wxPython GUI 移植。
 
@@ -56,6 +56,7 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 | P0 | 浏览器可完成「选书 → 转书 → 拿 M4B」 | 测试 EPUB 全流程成功 |
 | P0 | 本地 LPK 可 build + install 到默认微服 | `lzc-cli lpk install` 无报错 |
 | P0 | 数据持久化 | 重启后 `/lzcapp/var` 任务记录与缓存仍在 |
+| P1 | 网盘右键 EPUB 打开应用 | `file_handler` 出现在网盘打开方式 |
 | P1 | 网盘选 EPUB、M4B 写回网盘 | inject + document 权限链路通 |
 | P1 | 长任务不阻塞 Web | 提交后 3s 内返回任务 ID |
 | P2 | GPU 加速 | CPU 50 字/秒 → GPU 500 字/秒（可选） |
@@ -79,10 +80,10 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 
 | ID | 需求 | 优先级 | 说明 |
 |----|------|--------|------|
-| F-Web-01 | 应用首页可访问 | P0 | `https://audiblez.<微服名>.heiyu.space` |
+| F-Web-01 | 应用首页可访问 | P0 | `https://audiblez.your-box-name.heiyu.space` |
 | F-Web-02 | 选择旁白 voice | P0 | 至少英/中各 1 个默认 voice |
 | F-Web-03 | 调节语速 | P0 | 0.5～2.0，默认 1.0 |
-| F-Web-04 | 上传 EPUB 或指定路径 | P0 | 表单上传；P1 网盘路径 |
+| F-Web-04 | 上传 EPUB 或指定路径 | P0/P1 | M2 表单上传；M3 网盘路径 |
 | F-Web-05 | 章节勾选 | P1 | 对应 CLI `-p` 交互能力 |
 | F-Web-06 | 提交转换任务 | P0 | 异步，立即返回 |
 | F-Web-07 | 任务列表与进度 | P0 | 状态：queued/running/done/failed |
@@ -103,8 +104,8 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 
 | ID | 需求 | 优先级 | 说明 |
 |----|------|--------|------|
-| F-Netdisk-01 | `document.read` 读 EPUB | P1 | 服务端读 `/lzcapp/documents` |
-| F-Netdisk-02 | `document.write` 写 M4B | P1 | 完成后 PUT 或 API 写回 |
+| F-Netdisk-01 | 从网盘读取 EPUB | P1 | M3 先用浏览器侧 `/_lzc/files/home` fetch，再上传给后端创建任务 |
+| F-Netdisk-02 | 写 M4B 回网盘 | P1 | M3 完成后通过浏览器侧 PUT 或明确的保存 API 写回 |
 | F-Netdisk-03 | `lzc-file-picker` inject | P1 | 浏览器选文件，传路径给后端 |
 | F-Netdisk-04 | 大文件不走浏览器上传 | P1 | >50MB 推荐网盘路径 |
 
@@ -114,12 +115,12 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 
 | ID | 需求 | 优先级 | 说明 |
 |----|------|--------|------|
-| F-FileHandler-01 | 声明 EPUB 类型 | **P0（提审）** | 网盘右键 EPUB → 打开本应用 |
+| F-FileHandler-01 | 声明 EPUB 类型 | **P1（M3 / 提审必需）** | 网盘右键 EPUB → 打开本应用 |
 | F-FileHandler-02 | 声明 M4B 类型 | **P1** | 网盘右键 M4B → 打开播放/管理 |
-| F-FileHandler-03 | `open` 路由解析 `file` | P0 | `actions.open` 中 `%u` 替换为 WebDAV 路径 |
-| F-FileHandler-04 | EPUB 打开 → 转换流程 | P0 | 自动创建转换任务或预填表单 |
+| F-FileHandler-03 | `open` 路由解析 `file` | P1 | `actions.open` 中 `%u` 替换为 WebDAV 路径 |
+| F-FileHandler-04 | EPUB 打开 → 转换流程 | P1 | 自动创建转换任务或预填表单 |
 | F-FileHandler-05 | M4B 打开 → 播放页 | P1 | HTML5 `<audio>` 或跳转播放器 UI |
-| F-FileHandler-06 | 多应用时出现在选择器 | P0 | 用户网盘可见「Audiblez」选项 |
+| F-FileHandler-06 | 多应用时出现在选择器 | P1 | 用户网盘可见「Audiblez」选项 |
 
 **建议声明的 MIME（v1.3.8+）：**
 
@@ -144,7 +145,7 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 | ID | 需求 | 优先级 | 说明 |
 |----|------|--------|------|
 | F-Sec-01 | 微服登录态访问 | P0 | 走 ingress 鉴权，不 public_path |
-| F-Sec-02 | 权限最小声明 | P0 | 见 package.yml |
+| F-Sec-02 | 权限最小声明 | P0/P1 | M2 不声明文稿权限；M3 增加 `document.read/write` |
 | F-Sec-03 | 任务文件仅本应用可见 | P0 | 落在 `/lzcapp/var` |
 | F-Sec-04 | 免密登录 inject | P2 | 提审前 |
 
@@ -154,7 +155,7 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 
 | 类别 | 要求 |
 |------|------|
-| 性能 | 短篇测试 EPUB（<3 万字）CPU 下 15 分钟内完成 |
+| 性能 | 短篇测试 EPUB（<3 万字）CPU 下 20 分钟内完成 |
 | 镜像体积 | 接受 4～6 GB（含 PyTorch CPU + 模型） |
 | 可用性 | 容器崩溃后，已完成任务 M4B 仍可下载 |
 | 可维护性 | audiblez 源码与 LPK 包装分层，便于跟进上游版本 |
@@ -168,7 +169,7 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 | 依赖 | 用途 | 处理方式 |
 |------|------|----------|
 | Python 3.12 | 运行时 | Dockerfile |
-| ffmpeg | M4B 合并 | apt 安装 |
+| ffmpeg | M4B 合并 | apt 安装；M2 使用原生 `aac` 编码器，避免依赖 `libfdk_aac` |
 | espeak-ng | Kokoro 音素 | apt + espeakng-loader |
 | Kokoro-82M | TTS | 构建时下载到镜像 |
 | xx_ent_wiki_sm | 分句 | 构建时 `spacy download` |
@@ -181,10 +182,10 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 | 阶段 | 交付物 | 验收 |
 |------|--------|------|
 | M0 文档 | PRD / ARCH / CASES | 评审通过 |
-| M1 骨架 | Dockerfile + 空 Web + 三件套 | `deploy` 后首页可开 |
-| M2 核心 | 上传 EPUB → M4B | CASES P0 全绿 |
-| M3 网盘 | inject + 读写文稿 | CASES P1 网盘用例绿 |
-| M4 发布包 | build + install | CASES 部署用例绿 |
+| M1 骨架 | Dockerfile + FastAPI 空 Web + 三件套 | `deploy` 后首页可开 |
+| M2 核心 | 上传 EPUB → M4B 下载 | 上传类 P0 CASES 全绿 |
+| M3 网盘与应用关联 | `file_handler` 右键 EPUB + inject + 网盘读写 | CASE-FH 与 CASE-NETDISK 绿 |
+| M4 发布包 | `project build` + `lpk install` | 发布包部署 CASES 绿 |
 | M5 提审准备 | 免密、资料、GPU 可选 | publish-checklist |
 
 ---
@@ -198,17 +199,20 @@ Audiblez 是一款开源 EPUB → 有声书工具，核心能力为：
 | 长任务 OOM | 容器被杀 | 限制并发；监控内存 |
 | 上游 audiblez 升级破坏 API | 包装层失效 | 薄包装 + 版本锁定 0.4.9 |
 | 网盘 inject 兼容性 | 选书失败 | 保留本地上传兜底 |
+| ffmpeg 编码器不可用 | M4B 合成失败 | 使用 Debian 默认 ffmpeg 支持的原生 `aac`，M2 前验证 `ffmpeg -encoders` |
 
 ---
 
-## 10. 开放问题
+## 10. 已拍板决策
 
-| # | 问题 | 决策截止 |
-|---|------|----------|
-| OQ-1 | Web 框架：Gradio vs FastAPI+静态页 | M1 前 → 建议 Gradio（依赖已存在） |
-| OQ-2 | 包名 `package` 最终 ID | M1 前 |
-| OQ-3 | MVP 是否必须网盘（或仅上传） | M2 可先上传，M3 上网盘 |
-| OQ-4 | 是否合并进上游 audiblez 仓库 vs 独立 lpk 仓 | 当前：同级 `audiblez-lpk/` |
+| # | 决策 | 说明 |
+|---|------|------|
+| D-1 | Web 框架使用 FastAPI + 简单 HTML/HTMX | `/api/jobs`、`/open`、下载接口和路径安全更直接 |
+| D-2 | 正式包名 `cloud.lazycat.app.audiblez`，开发包名 `cloud.lazycat.app.audiblez.dev` | subdomain 固定 `audiblez` |
+| D-3 | M2 只做上传 EPUB → M4B 下载；M3 再做 `file_handler`、inject、网盘写回 | 避免网盘问题阻塞核心 TTS 验证 |
+| D-4 | M3 网盘读取先走浏览器侧 `/_lzc/files/home` fetch，再提交给后端 | 不让后端猜 WebDAV 到容器路径 |
+| D-5 | CPU-only MVP，GPU 作为 P2；Kokoro/spaCy 构建时 bake | 冷启动可控，兼容普通微服 |
+| D-6 | ffmpeg 统一使用原生 `aac` | 避免 Debian 默认 ffmpeg 不含 `libfdk_aac` |
 
 ---
 

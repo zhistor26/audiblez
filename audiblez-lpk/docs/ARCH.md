@@ -19,12 +19,12 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │ LPK: cloud.lazycat.app.audiblez (subdomain: audiblez)           │
 │  application.routes: /=http://audiblez:7860                      │
-│  application.injects: browser → lzc-file-picker (P1)            │
+│  application.file_handler / injects: M3 网盘入口                 │
 ├─────────────────────────────────────────────────────────────────┤
 │ Service: audiblez (embed 镜像)                                    │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
 │  │ Web Layer    │  │ Job Manager  │  │ audiblez (upstream)    │ │
-│  │ Gradio/FAPI  │→ │ 队列+状态机  │→ │ core.py / voices.py    │ │
+│  │ FastAPI+HTML │→ │ 队列+状态机  │→ │ core.py / voices.py    │ │
 │  └──────────────┘  └──────────────┘  └────────────────────────┘ │
 │         │                  │                    │                │
 │         └──────────────────┴────────────────────┘                │
@@ -32,7 +32,7 @@
 │  ┌─────────────────────────┴─────────────────────────┐           │
 │  │ 持久化                                             │           │
 │  │  /lzcapp/var/{jobs,huggingface,cache}            │           │
-│  │  /lzcapp/documents  (网盘 EPUB 输入 / M4B 输出)   │           │
+│  │  /lzcapp/documents  (M3 网盘 EPUB 输入 / M4B 输出)│           │
 │  └───────────────────────────────────────────────────┘           │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -62,14 +62,13 @@ audiblez-lpk/
 │   └── icon.png
 ├── docker/
 │   └── Dockerfile
-├── vendor/
-│   └── audiblez/                 # 上游源码拷贝或 submodule（与根 audiblez/ 同步）
 ├── web/
-│   ├── app.py                    # 入口：启动 Gradio / FastAPI
+│   ├── app.py                    # 入口：启动 FastAPI / Uvicorn
 │   ├── job_manager.py            # 任务 CRUD、状态、持久化
 │   ├── job_runner.py             # 包装 core.main，进度回调
 │   ├── paths.py                  # /lzcapp 路径常量
-│   └── static/                   # 可选：自定义 CSS
+│   ├── templates/                # 简单 HTML / HTMX
+│   └── static/                   # CSS / JS
 ├── content/                      # inject 资源（lzc-build contentdir）
 │   └── lazycat-injects/
 │       └── lzc-file-chooser-inject.js
@@ -80,8 +79,8 @@ audiblez-lpk/
 **与当前 monorepo 关系：**
 
 ```text
-lazycat-skills/audiblez/          # 上游 audiblez 源码（已存在）
-audiblez-lpk/vendor/audiblez/     # 构建时复制或 submodule 指向同级
+lazycat-skills/audiblez/audiblez/ # 上游 Python 包源码（已存在）
+audiblez-lpk/                     # LPK 包装层；Docker build context 直接复制仓库根的 audiblez/
 ```
 
 ---
@@ -96,16 +95,13 @@ audiblez-lpk/vendor/audiblez/     # 构建时复制或 submodule 指向同级
 - 校验上传文件（扩展名 `.epub`，大小上限可配置）
 - 创建任务、查询任务、下载结果
 
-**推荐技术选型（MVP）：**
+**技术选型（已拍板）：**
 
-| 选项 | 优点 | 缺点 | 结论 |
-|------|------|------|------|
-| Gradio | 快速、依赖已在 kokoro 链 | 定制 inject 稍麻烦 | **MVP 首选** |
-| FastAPI + HTMX | 灵活、API 清晰 | 开发量更大 | P2 或并行 |
+MVP 使用 **FastAPI + Uvicorn + 简单 HTML/HTMX**。理由：`/api/jobs`、`/open?file=%u`、下载接口、路径安全校验和后续网盘接入更直接；避免在文档中同时维护两套 Web 框架心智模型。
 
 **监听：**
 
-- `0.0.0.0:7860`（Gradio 默认）或 `8080`（与 nginx 模式统一时用 8080）
+- `0.0.0.0:7860`
 - manifest `routes` 与容器 `EXPOSE` 保持一致
 
 ### 3.2 Job Manager（`web/job_manager.py`）
@@ -166,13 +162,22 @@ queued → running → done
 
 **进度回调：**
 
-- 包装 `gen_audio_segments` 中的 `post_event` 或 monkey-patch stats
-- 定期写 `meta.json`（每章或每 N 句）
+`audiblez.core.main(..., post_event=callback)` 将事件映射到 `meta.json.progress`：
+
+| core 事件 | 写入字段 |
+|-----------|----------|
+| `CORE_STARTED` | `status=running`、`started_at` |
+| `CORE_CHAPTER_STARTED` | `current_chapter_index` |
+| `CORE_PROGRESS` | `total_chars`、`processed_chars`、`percent`、`eta_seconds` |
+| `CORE_CHAPTER_FINISHED` | `finished_chapters[]` |
+| `CORE_FINISHED` | `status=done`、`finished_at` |
+
+写入频率：收到事件立即原子写 `meta.json.tmp → rename(meta.json)`；若事件过密，至少每 2 秒写一次。
 
 **线程模型：**
 
 ```text
-Main thread: Gradio / Uvicorn
+Main thread: FastAPI / Uvicorn
 Worker thread: JobRunner.run(job_id)   # MVP 单 worker
 ```
 
@@ -190,7 +195,7 @@ P2 可改为 `multiprocessing` 以便 cancel 杀进程。
 
 **若需最小改动上游（可选后续）：**
 
-在 `audiblez/core.py` 增加无 argparse 的 `run_epub(...)` 函数；MVP 可在 vendor 内 fork 一行包装，避免改 monorepo 根 `audiblez/`。
+在 `audiblez/core.py` 增加无 argparse 的 `run_epub(...)` 函数；MVP 允许直接改本 fork 的根 `audiblez/`，不再引入 `vendor/` 或 submodule。
 
 ---
 
@@ -228,10 +233,31 @@ P2 可改为 `multiprocessing` 以便 cancel 杀进程。
 
 ```text
 Stage base:     python:3.12-slim-bookworm + ffmpeg + espeak-ng
-Stage deps:     pip install audiblez + web extras
-Stage models:   spacy download + KPipeline warmup（英+中 voice 各一次可选）
+Stage deps:     pip install audiblez + fastapi + uvicorn + python-multipart + jinja2
+Stage models:   设置 HF_HOME=/opt/audiblez-models，spacy download + KPipeline warmup
 Stage runtime:  复制应用 + 非 root 用户（可选）
 ```
+
+**模型预烘焙要求：**
+
+```bash
+python -m spacy download xx_ent_wiki_sm
+python - <<'PY'
+from kokoro import KPipeline
+KPipeline(lang_code="a")  # M2 默认英文 voice，例如 af_sky
+KPipeline(lang_code="z")  # M3/P1 中文 voice，例如 zf_xiaoxiao
+PY
+```
+
+运行时默认离线：
+
+```dockerfile
+ENV HF_HOME=/opt/audiblez-models
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+```
+
+通过标准：容器启动和 M2 冒烟转换期间日志中不出现 HuggingFace 下载进度；若缺模型应在构建阶段失败，而不是运行时下载。
 
 ### 5.2 镜像体积预估
 
@@ -248,13 +274,21 @@ Stage runtime:  复制应用 + 非 root 用户（可选）
 
 ```yaml
 healthcheck:
-  test: ["CMD", "curl", "-f", "http://127.0.0.1:7860/"]
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=5)"]
   interval: 30s
   timeout: 10s
   start_period: 120s
 ```
 
-MVP 若 Gradio 无轻量 health 路径，可用 `curl` 首页或自建 `/api/health`。
+### 5.4 ffmpeg 编码器约束
+
+上游 `audiblez/core.py` 的临时拼接阶段曾使用 `libfdk_aac`，Debian 默认 ffmpeg 通常不带该编码器。M2 前必须改为原生 `aac`，并在容器内验证：
+
+```bash
+ffmpeg -hide_banner -encoders | grep -E '(^| )A.*aac'
+```
+
+通过标准：`CASE-JOB-01` 能生成 `output.m4b`，不因 `Unknown encoder 'libfdk_aac'` 失败。
 
 ---
 
@@ -262,25 +296,51 @@ MVP 若 Gradio 无轻量 health 路径，可用 `curl` 首页或自建 `/api/hea
 
 ### 6.1 `package.yml`（元数据 + 权限）
 
+M2（上传-only MVP）最小权限：
+
 ```yaml
 package: cloud.lazycat.app.audiblez
 version: 0.1.0
 name: Audiblez
 permissions:
-  required:
-    - document.read
-    - document.write
   optional:
     - net.internet      # 模型未完全 bake 时兜底
     - device.dri.render   # GPU P2
 ```
 
-MVP 若模型全 bake，`net.internet` 可降为 optional 或不声明。
+M3（网盘 / 应用关联）追加权限：
+
+```yaml
+permissions:
+  required:
+    - document.read
+    - document.write
+  optional:
+    - net.internet
+    - device.dri.render
+```
+
+若仅使用浏览器侧 `/_lzc/files/home` 读取，后端仍应把文稿权限声明作为 M3 验收项，因为保存 M4B 回网盘需要写权限。
 
 ### 6.2 `lzc-manifest.yml`（运行时）
 
+M2 最小 manifest：
+
 ```yaml
-lzc-sdk-version: "0.1"
+application:
+  subdomain: audiblez
+  routes:
+    - /=http://audiblez:7860
+services:
+  audiblez:
+    image: embed:audiblez
+    binds:
+      - /lzcapp/var:/lzcapp/var
+```
+
+M3 追加 `file_handler` 与 inject：
+
+```yaml
 application:
   subdomain: audiblez
   routes:
@@ -296,9 +356,19 @@ application:
     actions:
       open: /open?file=%u
   injects:
-    - stage: browser
-      files:
-        - lazycat-file-chooser-inject.js
+    - id: open-save-chooser
+      on: browser
+      when:
+        - /*
+      do:
+        - src: file:///lzcapp/pkg/content/lazycat-injects/lzc-file-chooser-inject.js
+          params:
+            diskRoot: /_lzc/files/home
+            fallbackMime: application/octet-stream
+            locale: auto
+            hooks:
+              fileInput: true
+              fileSystemAccess: true
 services:
   audiblez:
     image: embed:audiblez
@@ -332,7 +402,7 @@ pkgout: .
 
 ## 7. 网盘集成架构
 
-### 7.1 应用关联（file_handler）— 网盘右键打开
+### 7.1 应用关联（file_handler）— 网盘右键打开（M3）
 
 与「应用内 file-picker inject」是**两条入口**，都要支持：
 
@@ -342,15 +412,15 @@ pkgout: .
     ▼
 系统根据 file_handler.mime 匹配应用
     ▼
-打开 URL: https://audiblez.<微服>.heiyu.space/open?file=<WebDAV路径>
+打开 URL: https://audiblez.your-box-name.heiyu.space/open?file=<WebDAV路径>
     ▼
 Web /open 处理器:
     ├─ 后缀 .epub → mode=convert → 创建任务或预填转换页
     └─ 后缀 .m4b  → mode=play     → 播放器页（HTML5 audio）
     ▼
-读文件:
+权威数据源:
     浏览器侧 GET /_lzc/files/home + normalize(path)
-    或服务端读 /lzcapp/documents（需 document.read + 路径映射）
+    读到 Blob/File 后 POST /api/jobs
 ```
 
 **`%u` 路径处理（与 lazycat-lpk-netdisk 一致）：**
@@ -364,7 +434,7 @@ function normalizeLazyCatPath(path) {
 }
 ```
 
-### 7.2 应用内选文件（inject + file-picker）
+### 7.2 应用内选文件（inject + file-picker，M3）
 
 ```text
 浏览器主页面
@@ -372,21 +442,21 @@ function normalizeLazyCatPath(path) {
     ▼
 用户点击「从网盘选择」→ 得到文稿相对路径
     ▼
-POST /api/jobs { "source_type": "document", "path": "..." }
+浏览器 GET /_lzc/files/home + normalize(path) → File/Blob
     ▼
-JobRunner 从 /lzcapp/documents/<path> 读取
+POST /api/jobs multipart 上传给后端
     ▼
 完成后：
   方案 A: Web 下载 M4B（GET /api/jobs/<id>/download）
-  方案 B: 复制到 /lzcapp/documents/<user_chosen_dir>/book.m4b
-  方案 C: 前端 Blob + PUT /_lzc/files/...（见 lazycat-lpk-netdisk）
+  方案 B: 前端 Blob + PUT /_lzc/files/home/<chosen path>（见 lazycat-lpk-netdisk）
+  方案 C: 后端保存 API（仅当前端 PUT 被权限/API 证明确实阻塞时）
 ```
 
-**MVP 优先：** file_handler（右键 EPUB）+ 方案 A；inject 与 M4B 播放为 P1。
+**M2 不实现网盘读取。M3 优先：** file_handler 右键 EPUB + 浏览器侧 fetch + 方案 A 下载；M4B 播放和写回网盘属于 P1。
 
 ---
 
-## 8. API 设计（REST，供 Gradio 内部或前后端分离）
+## 8. API 设计（FastAPI）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -396,6 +466,9 @@ JobRunner 从 /lzcapp/documents/<path> 读取
 | GET | `/api/jobs` | 任务列表 |
 | GET | `/api/jobs/{id}` | 任务详情 + 进度 |
 | GET | `/api/jobs/{id}/download` | 下载 M4B |
+| GET | `/open` | M3 file_handler 入口，解析 `file` query 后渲染转换页 |
+| GET | `/play` | P1 M4B 播放页 |
+| GET | `/api/files/stream` | P1 音频流代理，或明确改用 `/_lzc/files/home` |
 | DELETE | `/api/jobs/{id}` | 取消/删除（P2） |
 
 ---
@@ -441,10 +514,10 @@ JobRunner 从 /lzcapp/documents/<path> 读取
 
 | 版本 | 架构变更 |
 |------|----------|
-| v0.1.0 MVP | 单服务 embed 镜像 + Gradio + 本地上传 |
-| v0.2.0 | 网盘 inject + document 读写 |
+| v0.1.0 MVP | 单服务 embed 镜像 + FastAPI + 本地上传 |
+| v0.2.0 | file_handler + 网盘 inject + 浏览器侧读写 |
 | v0.3.0 | GPU optional + CUDA torch 镜像变体 |
-| v0.4.0 | FastAPI 替换 Gradio；任务 cancel |
+| v0.4.0 | 任务 cancel / 多任务管理 |
 | v1.0.0 | 提审：免密 inject、copy-image、商店元数据 |
 
 ---
@@ -457,5 +530,8 @@ JobRunner 从 /lzcapp/documents/<path> 读取
 | ADR-02 | Python 3.12 in Docker | 匹配 audiblez `requires-python` |
 | ADR-03 | 构建时 bake 模型 | 满足审核冷启动、离线可用 |
 | ADR-04 | 单 worker 任务队列 | 避免 OOM；MVP 足够 |
-| ADR-05 | Gradio MVP | 依赖链已有；最快验证 |
+| ADR-05 | FastAPI + HTML/HTMX MVP | `/api/jobs`、`/open`、下载和路径安全更直接 |
 | ADR-06 | CPU PyTorch 默认 | 微服通用性；GPU 作 optional 镜像 |
+| ADR-07 | M2 不做网盘，M3 做 file_handler/inject | 先验证核心 TTS，再接微服生态入口 |
+| ADR-08 | 网盘读写先走浏览器侧 `/_lzc/files/home` | 避免后端猜 WebDAV 到容器路径 |
+| ADR-09 | ffmpeg 使用原生 `aac` | 避免 Debian 默认 ffmpeg 缺少 `libfdk_aac` |

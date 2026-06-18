@@ -14,6 +14,7 @@
 - **优先级**：P0（MVP 必过）/ P1（第二迭代）/ P2（提审或增强）
 - **验收**：可客观判断通过/失败
 - **测试数据**：统一使用 Daisy 无障碍测试 EPUB（小体积、可重复）
+- **阶段边界**：M2 只验证上传 EPUB → M4B 下载；M3 再验证 `file_handler`、inject 与网盘读写。
 
 ```bash
 # 标准测试 EPUB（约 1～3 万字量级）
@@ -61,10 +62,11 @@ cd audiblez-lpk/lzc
 | CASE-DEPLOY-01 | P0 | 开发态部署 | `lzc-cli project deploy` | 命令成功，无 manifest 校验错误 |
 | CASE-DEPLOY-02 | P0 | 发布包构建 | `lzc-cli project build` | 产出 `*.lpk`，体积 >100MB（含镜像） |
 | CASE-DEPLOY-03 | P0 | 正式安装 | `lzc-cli lpk install ./<pkg>.lpk` | 安装成功，打印 HTTPS 入口 URL |
-| CASE-DEPLOY-04 | P0 | 首页可访问 | 浏览器打开 `https://audiblez.<微服名>.heiyu.space` | 200，显示 Web UI，需微服登录态 |
+| CASE-DEPLOY-04 | P0 | 首页可访问 | 浏览器打开 `https://audiblez.your-box-name.heiyu.space` | 200，显示 Web UI，需微服登录态 |
 | CASE-DEPLOY-05 | P0 | 冷启动时间 | 安装后首次打开（模型已 bake） | 首屏可交互 ≤ 5 分钟 |
 | CASE-DEPLOY-06 | P0 | 容器日志 | `lzc-cli project log -f` | 无持续 crash loop |
 | CASE-DEPLOY-07 | P1 | lpk info | `lzc-cli lpk info <lpk>` | 显示 package、version、镜像信息 |
+| CASE-DEPLOY-08 | P1 | 元数据完整 | 检查 `package.yml` 和 `lzc-build.yml` | 有 icon、zh-CN/en-US locales、name/description |
 
 ### 3.2 Web 界面（CASE-WEB）
 
@@ -74,7 +76,7 @@ cd audiblez-lpk/lzc
 | CASE-WEB-02 | P0 | 语速调节 | 设置 speed=1.5 并提交 | 任务 meta 中 speed=1.5 |
 | CASE-WEB-03 | P0 | 上传 EPUB | 上传 `test-book.epub` | 创建任务，返回 job_id |
 | CASE-WEB-04 | P0 | 非法文件 | 上传 `.txt` | 4xx，友好错误，无任务创建 |
-| CASE-WEB-05 | P0 | 超大文件 | 上传 >`AUDIBLEZ_MAX_UPLOAD_MB` | 拒绝并提示 |
+| CASE-WEB-05 | P0 | 超大文件 | `dd if=/dev/zero of=large.epub bs=1M count=$((AUDIBLEZ_MAX_UPLOAD_MB+1))` 后上传 | 拒绝并提示 |
 | CASE-WEB-06 | P1 | 章节选择 | 勾选部分章节后提交 | 仅选中章节生成 WAV/M4B |
 | CASE-WEB-07 | P0 | 任务列表 | 提交后查看列表 | 显示 queued/running/done |
 
@@ -106,13 +108,13 @@ cd audiblez-lpk/lzc
 
 | ID | 优先级 | 场景 | 步骤 | 预期结果 |
 |----|--------|------|------|----------|
-| CASE-FH-01 | **P0** | manifest 声明 | 检查 `file_handler.mime` 含 epub + m4b | YAML 含 `application/epub+zip`、`x-lzc-extension/epub`、`audio/mp4` 或 `x-lzc-extension/m4b` |
-| CASE-FH-02 | **P0** | 网盘识别 EPUB | 懒猫网盘右键某 EPUB | 打开方式列表出现「Audiblez」 |
-| CASE-FH-03 | **P0** | 右键打开 EPUB | 选择 Audiblez 打开 | 跳转到 `/open?file=...`，进入转换页或自动创建任务 |
-| CASE-FH-04 | P0 | `/open` 解析路径 | 带 `file` 参数的 URL | 应用正确解析 `%u` 路径，无目录穿越 |
+| CASE-FH-01 | P1 | EPUB manifest 声明 | 检查 `file_handler.mime` 含 EPUB | YAML 含 `application/epub+zip`、`x-lzc-extension/epub` |
+| CASE-FH-02 | P1 | 网盘识别 EPUB | 懒猫网盘右键某 EPUB | 打开方式列表出现「Audiblez」 |
+| CASE-FH-03 | P1 | 右键打开 EPUB | 选择 Audiblez 打开 | 跳转到 `/open?file=...`，进入转换页或自动创建任务 |
+| CASE-FH-04 | P1 | `/open` 解析路径 | 带 `file` 参数的 URL | 应用正确解析 `%u` 路径，无目录穿越 |
 | CASE-FH-05 | P1 | 网盘识别 M4B | 右键 `.m4b` 文件 | 打开方式列表出现 Audiblez |
 | CASE-FH-06 | P1 | 右键打开 M4B | 选择 Audiblez | 进入播放页，`<audio>` 可播放 |
-| CASE-FH-07 | P1 | MIME 兜底 | 仅 `x-lzc-extension/m4b` 时 | 后缀为 `.m4b` 的文件仍能匹配 |
+| CASE-FH-07 | P1 | M4B manifest 声明 | 检查 `file_handler.mime` 含 M4B | YAML 含 `audio/mp4`、`audio/x-m4a`、`x-lzc-extension/m4b` |
 
 ### 3.6 网盘集成（inject / 读写）（CASE-NETDISK）
 
@@ -124,7 +126,7 @@ cd audiblez-lpk/lzc
 | CASE-NETDISK-04 | P1 | M4B 写回网盘 | 完成后「保存到网盘」 | 网盘可见 M4B，可播放 |
 | CASE-NETDISK-05 | P1 | 权限未声明 | 临时去掉 `document.read` 重建 | 读文稿失败，错误明确 |
 
-### 3.6 安全（CASE-SEC）
+### 3.7 安全（CASE-SEC）
 
 | ID | 优先级 | 场景 | 步骤 | 预期结果 |
 |----|--------|------|------|----------|
@@ -140,8 +142,9 @@ cd audiblez-lpk/lzc
 |----|--------|------|------|----------|
 | CASE-NFR-01 | P0 | 短篇耗时 | test-book.epub，CPU | ≤ 20 分钟完成 |
 | CASE-NFR-02 | P1 | 内存稳定 | 转换过程中观察容器内存 | 无 OOM Kill（或 < 容器 limit） |
-| CASE-NFR-03 | P0 | ffmpeg 缺失降级 | 镜像故意无 ffmpeg（仅 dev 测） | 仍产出 WAV，UI 提示无 M4B |
-| CASE-NFR-04 | P2 | GPU 加速 | `AUDIBLEZ_USE_CUDA=1` + GPU 权限 | 速度显著优于 CPU |
+| CASE-NFR-03 | P0 | ffmpeg 编码器 | 容器内运行 `ffmpeg -hide_banner -encoders | grep -E '(^| )A.*aac'` | 存在原生 `aac` 编码器 |
+| CASE-NFR-04 | P2 | ffmpeg 缺失降级 | 镜像故意无 ffmpeg（仅 dev 测） | 仍产出 WAV，UI 提示无 M4B |
+| CASE-NFR-05 | P2 | GPU 加速 | `AUDIBLEZ_USE_CUDA=1` + GPU 权限 | 速度显著优于 CPU |
 
 ---
 
@@ -152,10 +155,10 @@ cd audiblez-lpk/lzc
 | CLI `audiblez book.epub -v af_sky` | CASE-JOB-01 | Web 等价 |
 | CLI `-p` 选章 | CASE-WEB-06 | |
 | CLI `-s` 语速 | CASE-WEB-02 | |
-| CLI `-c` CUDA | CASE-NFR-04 | |
+| CLI `-c` CUDA | CASE-NFR-05 | |
 | CLI `-o` 输出目录 | CASE-PERSIST-01 | 映射到 `/lzcapp/var/jobs` |
 | `audiblez-ui` GUI | — | **不移植** |
-| 无 ffmpeg 警告 | CASE-NFR-03 | core 已有逻辑 |
+| 无 ffmpeg 警告 | CASE-NFR-04 | core 已有逻辑 |
 
 ---
 
@@ -165,7 +168,7 @@ cd audiblez-lpk/lzc
 audiblez-lpk/tests/
 ├── test_paths.py          # 路径规范化、穿越防护
 ├── test_job_manager.py    # 状态机、meta 读写
-├── test_api.py            # FastAPI TestClient（若用 FastAPI）
+├── test_api.py            # FastAPI TestClient
 └── integration/
     └── test_core_smoke.py # 容器内短文本 TTS（CI 可选，耗时长）
 ```
@@ -186,11 +189,12 @@ MVP（v0.1.0）上线前 **必须全绿**：
 - [ ] CASE-JOB-01～05
 - [ ] CASE-PERSIST-01
 - [ ] CASE-SEC-01、02
-- [ ] CASE-NFR-01
-- [ ] **CASE-FH-01～04**（应用关联 / 网盘右键 EPUB）
+- [ ] CASE-NFR-01、03
 
 P1 迭代门槛：
 
+- [ ] CASE-DEPLOY-08（icon + locales）
+- [ ] CASE-FH-01～04（EPUB 网盘右键打开）
 - [ ] CASE-FH-05～07（M4B 右键打开与播放）
 - [ ] CASE-NETDISK-01～04
 - [ ] CASE-WEB-06
@@ -233,7 +237,7 @@ lzc-cli lpk install "./$LPK"
 
 # 上传测试（需替换 URL 与 cookie，或浏览器手工）
 # curl -F "file=@test-book.epub" -F "voice=af_sky" \
-#   "https://audiblez.<微服名>.heiyu.space/api/jobs"
+#   "https://audiblez.your-box-name.heiyu.space/api/jobs"
 
 lzc-cli project log -f
 ```
