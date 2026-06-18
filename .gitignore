@@ -1,14 +1,59 @@
+# Python
 venv
+.venv
 __pycache__
-.idea
-chapters.txt
-.DS_Store
 *.pyc
+*.pyo
+*.egg-info
+.eggs
+dist
+build
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.whl
+
+# IDE
+.idea
+.vscode
+.DS_Store
+
+# Audiblez 生成物 / 测试素材
+chapters.txt
+cover
 *.wav
 *.mp3
+*.m4b
 *.epub
-*.sh
-*.json
+
+# ML 模型与缓存（体积大，勿提交）
 *.onnx
-dist
-.venv
+*.pt
+*.pth
+*.safetensors
+*.bin
+.huggingface/
+
+# LazyCat / LPK 本地构建产物
+*.lpk
+lzc-build.dev.yml.local
+.agents/
+
+# 网盘 / 手册外部依赖（本地克隆，不提交）
+lzc-developer-doc/
+lazycat-developer-manual/
+
+# audiblez-lpk 运行时数据
+audiblez-lpk/lzc/*.lpk
+audiblez-lpk/.cache/
+
+# 环境变量与密钥
+.env
+.env.*
+*.pem
+credentials.json
+
+# 日志与临时文件
+*.log
+tmp/
+temp/
